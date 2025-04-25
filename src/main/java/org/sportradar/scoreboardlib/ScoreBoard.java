@@ -30,22 +30,9 @@ class ScoreBoard implements IScoreBoard {
         orderedGameIds = Collections.synchronizedSortedSet(new TreeSet<>(getIDComparator()));
     }
 
-    private void threadSafeAddTeams(Collection<Team> teams) throws StartGameException {
-        var teamsSortedByName = teams.stream().sorted(Comparator.comparing(Team::name)).toList();
-        while (true) {
-            teamsSortedByName.stream().filter(teamsInPlay::contains).forEach(StartGameException::throwGameByTeamAlreadyStarted);
-
-            boolean allTeamsAdded = true;
-            for (Team team : teamsSortedByName) {
-                if (!teamsInPlay.add(team)) {
-                    allTeamsAdded = false;
-                    break;
-                }
-            }
-            if (allTeamsAdded) {
-                break;
-            }
-        }
+    private synchronized void threadSafeAddTeams(Collection<Team> teams) throws StartGameException {
+        teams.stream().filter(teamsInPlay::contains).findFirst().ifPresent(StartGameException::throwGameByTeamAlreadyStarted);
+        teamsInPlay.addAll(teams);
     }
 
     private Comparator<String> getIDComparator() {
@@ -110,7 +97,7 @@ class ScoreBoard implements IScoreBoard {
 
     @Override
     public Collection<Game> getGames() {
-        ReentrantReadWriteLock.WriteLock readLock = lock.writeLock();
+        ReentrantReadWriteLock.ReadLock readLock = lock.readLock();
         try {
             readLock.lock();
             return orderedGameIds.stream().map(id -> new Game(gameInfos.get(id), gameStats.get(id))).toList();
