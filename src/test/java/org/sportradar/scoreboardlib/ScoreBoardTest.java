@@ -9,6 +9,11 @@ import org.sportradar.scoreboardlib.exceptions.StartGameException;
 
 import java.time.Instant;
 import java.util.*;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -170,4 +175,52 @@ class ScoreBoardTest {
         assertFalse(() -> scoreBoard.getGames().stream().anyMatch(game ->
                 game.gameInfo().equals(mockGameInfo)));
     }
+
+
+    @Test
+    public void whenMultithreadedStartGameWithConflictingTeamsOnlyOneGameShouldPass() {
+        var scoreBoard = new ScoreBoard(mockComparator, mockGameIdProvider);
+        List<Team> teams = new ArrayList<>();
+        int teamCount = new Random().nextInt(25, 50) * 2;
+        for (int i = 0; i < teamCount; ++i) {
+            teams.add(mockTeam("team" + i));
+        }
+
+        // add all possible game combinations
+        List<GameInfo> gameInfos = new ArrayList<>();
+        for (int i = 0; i < teams.size(); ++i) {
+            for (int j = 0; j < teams.size(); ++j) {
+                gameInfos.add(mockGameInfo(teams.get(i), teams.get(j)));
+            }
+        }
+        Collections.shuffle(gameInfos);
+
+        var executor = Executors.newCachedThreadPool();
+        var latch = new CountDownLatch(gameInfos.size());
+        var successStartGameCount = new AtomicInteger(0);
+        var failStartGameCount = new AtomicInteger(0);
+        gameInfos.forEach(gameInfo -> {
+            executor.submit(() -> {
+                try {
+                    scoreBoard.startGame(gameInfo);
+                    successStartGameCount.incrementAndGet();
+                } catch (StartGameException e) {
+                    failStartGameCount.incrementAndGet();
+                } finally {
+                    latch.countDown();
+                }
+            });
+        });
+        try {
+            if (!latch.await(5, TimeUnit.SECONDS)) {
+                throw new RuntimeException("timeout");
+            }
+        } catch (InterruptedException e) {
+            throw new RuntimeException(e);
+        }
+        executor.shutdown();
+        assertEquals(gameInfos.size() - teamCount / 2, failStartGameCount.get());
+        assertEquals(teamCount / 2, successStartGameCount.get());
+    }
+
 }
